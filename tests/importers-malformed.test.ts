@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { importLexicon, detectImportFormat } from '../src/core/importers/index.js';
+import { importLexicon, detectImportFormat, mergeRows } from '../src/core/importers/index.js';
 import { xmlUnescape } from '../src/core/importers/macos.js';
 import { exportText } from '../src/core/exporters/text.js';
-import type { Lexicon } from '../src/core/types.js';
+import { LIMITS, TermSchema } from '../src/core/schema.js';
+import type { Lexicon, Term } from '../src/core/types.js';
 
 const plist = (phrase: string, shortcut: string): string =>
   `<?xml version="1.0"?>\n<plist><array>\n<dict><key>phrase</key><string>${phrase}</string><key>shortcut</key><string>${shortcut}</string></dict>\n` +
@@ -183,6 +184,68 @@ describe('text format: a canonical that starts with #', () => {
       ['#tag', ['hash tag']],
       ['\\LaTeX', []],
     ]);
+  });
+});
+
+describe('fields over the documented schema limits: rows are skipped, not written', () => {
+  const word = 'w'.repeat(LIMITS.word + 1);
+  const prose = 'x'.repeat(LIMITS.text + 1);
+
+  // Catches: an 81-character word reached addTerm inside the import loop,
+  // which threw after the rows before it were written, so the rest of the
+  // file was lost mid-import and the error named an index nobody had seen.
+  it('validation rejects a word one character above the documented limit', () => {
+    expect(word).toHaveLength(LIMITS.word + 1);
+    for (const term of [
+      { canonical: word },
+      { canonical: 'X', aliases: [word] },
+      { canonical: 'X', aliases: [], never: [word] },
+      { canonical: 'X', aliases: [], phonetic: prose },
+      { canonical: 'X', aliases: [], notes: prose },
+    ]) {
+      expect(TermSchema.safeParse(term).success).toBe(false);
+    }
+    expect(TermSchema.safeParse({ canonical: 'w'.repeat(LIMITS.word) }).success).toBe(true);
+  });
+
+  it.each([
+    [{ canonical: word, aliases: [] } as Term, `canonical must be at most ${LIMITS.word} characters`],
+    [{ canonical: 'X', aliases: ['ok', word] } as Term, `aliases[1] must be at most ${LIMITS.word} characters`],
+    [{ canonical: 'X', aliases: [], never: [word] } as Term, `never[0] must be at most ${LIMITS.word} characters`],
+    [{ canonical: 'X', aliases: [], phonetic: prose } as Term, `phonetic must be at most ${LIMITS.text} characters`],
+    [{ canonical: 'X', aliases: [], notes: prose } as Term, `notes must be at most ${LIMITS.text} characters`],
+  ])('mergeRows skips a row whose field is over its limit, naming the field', (term, reason) => {
+    const { terms, skipped } = mergeRows([
+      { line: 7, term },
+      { line: 8, term: { canonical: 'Fine', aliases: ['fyn'] } },
+    ]);
+    expect(terms.map((t) => t.canonical)).toEqual(['Fine']);
+    expect(skipped).toEqual([{ line: 7, reason }]);
+  });
+
+  it('skips the over-limit line in a real file and imports the rest', () => {
+    const r = importLexicon(`Ashlr.AI: ashler\n${word}: ${word}\nKubernetes: k8s\n`, 'text');
+    expect(r.terms.map((t) => t.canonical)).toEqual(['Ashlr.AI', 'Kubernetes']);
+    expect(r.skipped).toEqual([{ line: 2, reason: `canonical must be at most ${LIMITS.word} characters` }]);
+  });
+
+  it('still accepts a row at the limit exactly', () => {
+    const at = 'w'.repeat(LIMITS.word);
+    const { terms, skipped } = mergeRows([{ line: 1, term: { canonical: at, aliases: [at] } }]);
+    expect(terms).toHaveLength(1);
+    expect(skipped).toEqual([]);
+  });
+
+  // Catches: an alias or never word of whitespace/format characters was kept
+  // raw (the schema drops it on read, but addTerm refuses it), so one bad
+  // entry aborted the whole import.
+  it('drops list entries that clean to nothing, as the schema does', () => {
+    const { terms, skipped } = mergeRows([
+      { line: 1, term: { canonical: 'X', aliases: ['ok', '\u200b', ' '], never: ['n', ' '] } },
+    ]);
+    expect(terms[0].aliases).toEqual(['ok']);
+    expect(terms[0].never).toEqual(['n']);
+    expect(skipped).toEqual([]);
   });
 });
 

@@ -1,8 +1,10 @@
 /**
  * suggestAliases(): guess the spellings a speech-to-text engine is likely to
  * produce for an invented name. Deterministic, at most 8 results, never the
- * canonical itself, and never a single everyday word (STOPLIST), which would
- * be rewritten wherever it is said.
+ * canonical itself, never a word over the schema's LIMITS.word (an alias it
+ * suggests but the schema would refuse made `lexicon add` reject a canonical
+ * that was fine on its own), and never a single everyday word (STOPLIST),
+ * which would be rewritten wherever it is said.
  *
  * Techniques, in priority order (earlier ones survive the cap):
  *   1. split on dots / hyphens / underscores / camelCase  ("Ashlr.AI" -> "Ashlr AI")
@@ -12,6 +14,7 @@
  *   5. common phoneme confusions                          (ph->f, hard c->k, k->c, soft c->s, y->i, doubled letters collapsed)
  */
 
+import { LIMITS } from './caps.js';
 import { STOPLIST } from './stoplist.js';
 import { DOMAIN_SUFFIX } from './matcher/tuning.js';
 
@@ -26,6 +29,9 @@ export function suggestAliases(canonical: string): string[] {
   const add = (s: string, everydayOk = false): void => {
     const v = s.replace(/\s+/g, ' ').trim();
     if (!v) return;
+    // Code points, as the schema counts them: a suggestion the schema would
+    // refuse (vowel insertion on a canonical already at the limit) is not one.
+    if (Array.from(v).length > LIMITS.word) return;
     const key = v.toLowerCase();
     if (seen.has(key)) return;
     // A one-word guess that is an everyday word ("Entire.io" -> "Entire",

@@ -18,6 +18,7 @@ import {
   mergeCandidates,
 } from '../src/core/import-sources.js';
 import type { HarvestCandidate, ImportSourceDeps } from '../src/core/index.js';
+import { LIMITS } from '../src/core/index.js';
 
 function deps(overrides: ImportSourceDeps = {}): Required<ImportSourceDeps> {
   return {
@@ -158,6 +159,17 @@ describe('contacts source', () => {
     expect(org?.category).toBe('brand');
     expect(org?.source).toBe('import:contacts');
   });
+
+  // Catches: a name one character over the schema's documented word limit
+  // became a candidate applyImportCandidates could only refuse after writing
+  // the ones before it.
+  it('does not propose a person or organization over the documented word limit', async () => {
+    const over = 'n'.repeat(LIMITS.word + 1);
+    const d = contactsDeps(`${'A'.repeat(70)}\t${'B'.repeat(30)}\t${over}\nAda\tLovelace\tAshlr.AI\n`);
+    const candidates = await source.harvest(d);
+    expect(candidates.map((c) => c.canonical)).toEqual(expect.arrayContaining(['Ada Lovelace', 'Ashlr.AI']));
+    for (const c of candidates) expect(Array.from(c.canonical).length).toBeLessThanOrEqual(LIMITS.word);
+  });
 });
 
 const ICS = `BEGIN:VCALENDAR
@@ -231,6 +243,30 @@ describe('calendar source', () => {
     // "Acme" recurs across two events; "Dentist" is a one-off generic word.
     expect(canonicals).toContain('Acme');
     expect(canonicals).not.toContain('Dentist');
+  });
+
+  // Catches: a multi-word title noun over the documented word limit became a
+  // candidate applyImportCandidates could only refuse mid-apply.
+  it('does not propose a title noun over the documented word limit', async () => {
+    const noun = `Acme ${'A'}${'a'.repeat(LIMITS.word - 5)}`;
+    expect(Array.from(noun).length).toBe(LIMITS.word + 1);
+    const calDir = path.join('/fake/home', 'Library', 'Calendars');
+    const icsPath = path.join(calDir, 'ABC.calendar', 'Events', '1.ics');
+    const ics = `BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:1\nSUMMARY:${noun} kickoff\nEND:VEVENT\nEND:VCALENDAR\n`;
+    const d = deps({
+      exists: (p) => p === calDir,
+      readDir: (p) => {
+        if (p === calDir) return ['ABC.calendar'];
+        if (p === path.join(calDir, 'ABC.calendar')) return ['Events'];
+        return ['1.ics'];
+      },
+      isDirectory: (p) => p !== icsPath && p.startsWith(calDir),
+      fileSize: (p) => (p === icsPath ? ics.length : undefined),
+      readText: (p) => (p === icsPath ? ics : ''),
+    });
+    const candidates = await source.harvest(d);
+    expect(candidates.map((c) => c.canonical)).not.toContain(noun);
+    for (const c of candidates) expect(Array.from(c.canonical).length).toBeLessThanOrEqual(LIMITS.word);
   });
 });
 
@@ -316,6 +352,27 @@ describe('github source', () => {
     const candidates = await source.harvest(githubDeps());
     expect(candidates.filter((c) => c.canonical === 'masonwyatt23').length).toBe(1);
   });
+
+  // Catches: a profile or repo name over the documented word limit became a
+  // candidate applyImportCandidates could only refuse mid-apply.
+  it('does not propose a profile or repo name over the documented word limit', async () => {
+    const over = 'n'.repeat(LIMITS.word + 1);
+    const d = deps({
+      platform: 'linux',
+      exec: (file, args) => {
+        if (file !== 'gh') throw new Error(`unexpected exec ${file}`);
+        const api = args[1] as string;
+        if (args[0] === 'auth') return 'Logged in';
+        if (api === 'user') return JSON.stringify({ login: 'masonwyatt23', name: over });
+        if (api === 'user/orgs') return JSON.stringify([]);
+        if (api === 'user/repos') return JSON.stringify([{ name: over, owner: { login: 'masonwyatt23' } }, { name: 'lexicon', owner: { login: 'masonwyatt23' } }]);
+        throw new Error(`unexpected gh api ${api}`);
+      },
+    });
+    const names = (await source.harvest(d)).map((c) => c.canonical);
+    expect(names).not.toContain(over);
+    expect(names).toEqual(expect.arrayContaining(['lexicon', 'masonwyatt23']));
+  });
 });
 
 describe('mergeCandidates', () => {
@@ -380,6 +437,23 @@ describe('applyImportCandidates', () => {
       const again = await applyImportCandidates(candidates, { globalPath });
       expect(again.added).toBe(0);
       expect(again.merged).toBe(1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // Catches: a candidate the schema refuses (a word one character over the
+  // documented limit, e.g. from a hand-rolled source) aborted the apply after
+  // the candidates before it were already written.
+  it('counts a candidate the schema refuses as skipped and still writes the rest', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'lexicon-import-test-'));
+    try {
+      const globalPath = path.join(dir, 'lexicon.yaml');
+      const candidates: HarvestCandidate[] = [
+        { canonical: 'Ada Lovelace', category: 'person', source: 'import:contacts', evidence: [], count: 1, suggestedAliases: [] },
+        { canonical: 'n'.repeat(LIMITS.word + 1), category: 'product', source: 'import:github', evidence: [], count: 1, suggestedAliases: [] },
+        { canonical: 'Grace Hopper', category: 'person', source: 'import:contacts', evidence: [], count: 1, suggestedAliases: [] },
+      ];
+      const result = await applyImportCandidates(candidates, { globalPath });
+      expect(result).toEqual({ added: 2, merged: 0, skipped: 1, path: globalPath });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

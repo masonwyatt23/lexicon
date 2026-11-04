@@ -24,6 +24,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { LIMITS } from './caps.js';
 import { compareText } from './collate.js';
 import { STOPLIST } from './stoplist.js';
 import { suggestAliases } from './suggest.js';
@@ -319,6 +320,10 @@ export async function harvestReport(root: string, opts: HarvestOptions = {}): Pr
   ): void => {
     const name = canonical.trim();
     if (!name) return;
+    // Code points, as the schema counts them: a name over the word limit can
+    // never become a term (the schema refuses it on write), so proposing it
+    // would only fail `harvest --add`'s all-or-nothing batch or stop the -i walk.
+    if (Array.from(name).length > LIMITS.word) return;
     const key = name.toLowerCase();
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -941,7 +946,9 @@ function safeSuggest(canonical: string): string[] {
  */
 export function harvestAliases(canonical: string, category: TermCategory): string[] {
   if (category === 'identifier') return [];
-  const aliases = safeSuggest(canonical);
+  // Over the schema's word limit an alias is unusable: kept, it would refuse
+  // the whole addTerms batch the candidate goes through.
+  const aliases = safeSuggest(canonical).filter((a) => Array.from(a).length <= LIMITS.word);
   if (/[\s._\-/]/.test(canonical)) return aliases;
   return aliases.filter((alias) => !/\s/.test(alias));
 }

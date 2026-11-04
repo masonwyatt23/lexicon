@@ -5,11 +5,11 @@ uppercase TODO-style literals:
 
 | Marker | Source |
 | --- | --- |
-| `TODO` | [Generic identifier set](../src/core/harvest.ts#L133) |
-| `FIXME` | [Generic identifier set](../src/core/harvest.ts#L133) |
-| `NOTE` | [Generic identifier set](../src/core/harvest.ts#L133) |
-| `HACK` | [Generic identifier set](../src/core/harvest.ts#L133) |
-| `XXX` | [Generic identifier set](../src/core/harvest.ts#L133) |
+| `TODO` | [Generic identifier set](../src/core/harvest.ts#L134) |
+| `FIXME` | [Generic identifier set](../src/core/harvest.ts#L134) |
+| `NOTE` | [Generic identifier set](../src/core/harvest.ts#L134) |
+| `HACK` | [Generic identifier set](../src/core/harvest.ts#L134) |
+| `XXX` | [Generic identifier set](../src/core/harvest.ts#L134) |
 
 The set contains other generic identifiers too. Its lookup compares the whole
 candidate with exact casing; these literals are not a case-insensitive or

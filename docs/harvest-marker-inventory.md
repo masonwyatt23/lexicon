@@ -1,7 +1,7 @@
 # Harvest marker inventory
 
 The following uppercase literals are grouped in the
-[generic identifier set](../src/core/harvest.ts#L133). They share the same
+[generic identifier set](../src/core/harvest.ts#L134). They share the same
 role: exact, case-sensitive generic identifier entries, rather than separate
 instructions to parse or remove task comments.
 

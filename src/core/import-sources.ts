@@ -24,7 +24,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isRecord } from '../util/json.js';
-import { IMPLEMENTED_IMPORT_SOURCES } from './caps.js';
+import { isInputError } from '../util/errors.js';
+import { IMPLEMENTED_IMPORT_SOURCES, LIMITS } from './caps.js';
 import { HARVEST_STOPLIST, harvestAliases } from './harvest.js';
 import { addTerm } from './store.js';
 import type { StoreOptions } from './store.js';
@@ -135,6 +136,13 @@ function importAliases(canonical: string, category: TermCategory): string[] {
   return harvestAliases(canonical, category);
 }
 
+/**
+ * True when `s` can be a canonical (code points, as the schema counts them).
+ * A source name over LIMITS.word can never become a term: `applyImportCandidates`
+ * would refuse it after writing the candidates before it.
+ */
+const fitsLexiconWord = (s: string): boolean => Array.from(s).length <= LIMITS.word;
+
 function personCandidate(
   name: string,
   source: TermSource,
@@ -142,7 +150,7 @@ function personCandidate(
   count = 1,
 ): HarvestCandidate | undefined {
   const canonical = name.trim().replace(/\s+/g, ' ');
-  if (canonical.length < 2 || canonical.length > 80) return undefined;
+  if (canonical.length < 2 || !fitsLexiconWord(canonical)) return undefined;
   // Email-shaped, bot-shaped or bot-named strings are not people.
   if (/@/.test(canonical) || /\[bot\]$/i.test(canonical) || /\bbot\b/i.test(canonical)) return undefined;
   return {
@@ -248,7 +256,7 @@ const contactsSource: VocabImportSource = {
       const person = personCandidate(name, 'import:contacts', 'macOS Contacts');
       if (person) candidates.push(person);
       const organization = org.trim();
-      if (organization.length >= 3 && organization.length <= 80 && !/@/.test(organization)) {
+      if (organization.length >= 3 && fitsLexiconWord(organization) && !/@/.test(organization)) {
         candidates.push({
           canonical: organization,
           category: 'brand',
@@ -404,6 +412,7 @@ const calendarSource: VocabImportSource = {
         }
         if (event.summary) {
           for (const noun of titleProperNouns(event.summary)) {
+            if (!fitsLexiconWord(noun)) continue;
             candidates.push({
               canonical: noun,
               category: 'other',
@@ -496,7 +505,7 @@ const githubSource: VocabImportSource = {
       const orgRepos = ghJson(d, ['api', `orgs/${org}/repos`, '--paginate']);
       if (Array.isArray(orgRepos)) {
         for (const r of orgRepos.filter(isRecord)) {
-          if (typeof r.name === 'string' && r.name.trim()) {
+          if (typeof r.name === 'string' && r.name.trim() && fitsLexiconWord(r.name.trim())) {
             candidates.push({
               canonical: r.name,
               category: 'product',
@@ -512,7 +521,7 @@ const githubSource: VocabImportSource = {
     const repos = ghJson(d, ['api', 'user/repos', '--paginate']);
     if (Array.isArray(repos)) {
       for (const r of repos.filter(isRecord).slice(0, 200)) {
-        if (typeof r.name === 'string' && r.name.trim()) {
+        if (typeof r.name === 'string' && r.name.trim() && fitsLexiconWord(r.name.trim())) {
           const owner = isRecord(r.owner) && typeof r.owner.login === 'string' ? r.owner.login : undefined;
           candidates.push({
             canonical: r.name,
@@ -615,6 +624,7 @@ export async function applyImportCandidates(
   const scope: TermScope = opts.scope ?? 'global';
   let added = 0;
   let merged = 0;
+  let skipped = 0;
   let path: string | undefined;
   for (const c of candidates) {
     const term: Term = {
@@ -623,10 +633,17 @@ export async function applyImportCandidates(
       category: c.category,
       source: c.source,
     };
-    const result = await addTerm(term, { ...opts, scope });
-    path ??= result.file.path;
-    if (result.created) added += 1;
-    else merged += 1;
+    try {
+      const result = await addTerm(term, { ...opts, scope });
+      path ??= result.file.path;
+      if (result.created) added += 1;
+      else merged += 1;
+    } catch (err) {
+      // A candidate the schema refuses (a word over LIMITS.word from a source
+      // that predates the cap) counts as skipped; a storage failure still aborts.
+      if (!isInputError(err)) throw err;
+      skipped += 1;
+    }
   }
-  return { added, merged, skipped: 0, ...(path !== undefined ? { path } : {}) };
+  return { added, merged, skipped, ...(path !== undefined ? { path } : {}) };
 }

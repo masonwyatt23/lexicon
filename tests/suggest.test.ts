@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LIMITS } from '../src/core/caps.js';
 import { suggestAliases } from '../src/core/suggest.js';
 
 describe('suggestAliases', () => {
@@ -53,6 +54,22 @@ describe('suggestAliases', () => {
   it('returns an empty list for blank input', () => {
     expect(suggestAliases('')).toEqual([]);
     expect(suggestAliases('   ')).toEqual([]);
+  });
+
+  // Catches: a suggestion over the schema's word limit (a vowel inserted into
+  // a canonical already at the limit) was handed to addTerm as a generated
+  // alias, so `lexicon add` refused a canonical that was legal on its own.
+  it('never suggests an alias over the documented word limit', () => {
+    // 80 characters ending in a >=3-consonant cluster: vowel insertion adds one.
+    const canonical = `${'a'.repeat(LIMITS.word - 5)}bcdfg`;
+    expect(canonical).toHaveLength(LIMITS.word);
+    const out = suggestAliases(canonical);
+    // The insertion lands before the last consonant: 'bcdf' + 'e' + 'g' (81 chars).
+    expect(out).not.toContain(`${'a'.repeat(LIMITS.word - 5)}bcdfeg`);
+    for (const s of out) expect(Array.from(s).length).toBeLessThanOrEqual(LIMITS.word);
+    // One shorter, the same insertion fits and is still offered.
+    const fits = suggestAliases(`${'a'.repeat(LIMITS.word - 6)}bcdfg`);
+    expect(fits).toContain(`${'a'.repeat(LIMITS.word - 6)}bcdfeg`);
   });
 });
 

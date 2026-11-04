@@ -1,6 +1,6 @@
 # Harvest marker catalog
 
-The TODO-style marker strings configured in [`src/core/harvest.ts`](../src/core/harvest.ts#L133) are:
+The TODO-style marker strings configured in [`src/core/harvest.ts`](../src/core/harvest.ts#L134) are:
 
 | Marker |
 | --- |

@@ -14,6 +14,7 @@ vi.mock('../src/core/suggest.js', () => ({
 }));
 
 import { HARVEST_MAX_FILES, harvestReport, harvestRepo, harvestTruncatedNote, HARVEST_STOPLIST } from '../src/core/harvest.js';
+import { LIMITS, parseLexicon } from '../src/core/schema.js';
 import { runHarvest } from '../src/cli/commands.js';
 import { createServer } from '../src/mcp/server.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -131,6 +132,36 @@ describe('harvestRepo', () => {
     // Still nothing generic, and still nothing out of node_modules.
     expect(byName(withSymbols, 'TypeError')).toBeUndefined();
     expect(byName(withSymbols, 'IgnoredVendorThing')).toBeUndefined();
+  });
+
+  // Catches: a name one character over the schema's documented word limit
+  // (a long directory or package name, a long README noun) became a candidate
+  // the schema always refuses, so `harvest --add`'s all-or-nothing addTerms
+  // batch wrote nothing and the -i walk stopped on it.
+  it('never proposes a canonical, or a suggested alias, over the documented word limit', async () => {
+    const over = 'n'.repeat(LIMITS.word + 1);
+    expect(parseLexicon({ terms: [{ canonical: 'a'.repeat(LIMITS.word) }] }).terms).toHaveLength(1);
+    expect(() => parseLexicon({ terms: [{ canonical: over }] })).toThrow(`must be at most ${LIMITS.word} characters`);
+
+    const dir = path.join(tmp, over);
+    await fs.mkdir(dir);
+    await fs.writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'b'.repeat(LIMITS.word), dependencies: { [over]: '^1.0.0' } }),
+    );
+    // A README proper noun mid-sentence, also one over the limit.
+    await fs.writeFile(path.join(dir, 'README.md'), `The ${`C${'a'.repeat(LIMITS.word)}`} is a name.\n`);
+
+    const candidates = await harvestRepo(dir, { git: false, minCount: 1 });
+    expect(candidates.map((c) => c.canonical)).not.toContain(over);
+    expect(candidates.map((c) => c.canonical)).not.toContain(`C${'a'.repeat(LIMITS.word)}`);
+    // The stubbed suggester returns canonical + ' spaced' / canonical + 'tight':
+    // for a canonical at the limit both are over it, so none is offered.
+    const atLimit = byName(candidates, 'b'.repeat(LIMITS.word));
+    expect(atLimit).toBeDefined();
+    expect(atLimit?.suggestedAliases).toEqual([]);
+    // Everything the harvest proposes is writable as a term: addTerms would not refuse it.
+    expect(() => parseLexicon({ terms: candidates.map((c) => ({ canonical: c.canonical, aliases: c.suggestedAliases })) })).not.toThrow();
   });
 
   it('excludes the XXX marker while retaining an adjacent identifier', async () => {

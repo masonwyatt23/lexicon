@@ -54113,6 +54113,7 @@ function suggestAliases(canonical) {
   const add = (s, everydayOk = false) => {
     const v = s.replace(/\s+/g, " ").trim();
     if (!v) return;
+    if (Array.from(v).length > LIMITS.word) return;
     const key = v.toLowerCase();
     if (seen.has(key)) return;
     if (!everydayOk && !key.includes(" ") && STOPLIST.has(key)) return;
@@ -54215,6 +54216,7 @@ function confusions(s) {
 var VOWELS, DIGRAPHS;
 var init_suggest = __esm({
   "src/core/suggest.ts"() {
+    init_caps();
     init_stoplist();
     init_tuning();
     VOWELS = /* @__PURE__ */ new Set(["a", "e", "i", "o", "u", "y"]);
@@ -54243,6 +54245,7 @@ async function harvestReport(root, opts = {}) {
   const bump3 = (canonical, category, source, evidence, count = 1, alwaysInclude = false, external = true) => {
     const name = canonical.trim();
     if (!name) return;
+    if (Array.from(name).length > LIMITS.word) return;
     const key = name.toLowerCase();
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -54663,7 +54666,7 @@ function safeSuggest(canonical) {
 }
 function harvestAliases(canonical, category) {
   if (category === "identifier") return [];
-  const aliases = safeSuggest(canonical);
+  const aliases = safeSuggest(canonical).filter((a) => Array.from(a).length <= LIMITS.word);
   if (/[\s._\-/]/.test(canonical)) return aliases;
   return aliases.filter((alias) => !/\s/.test(alias));
 }
@@ -54676,6 +54679,7 @@ var init_harvest = __esm({
     import_node_child_process = __toESM(require_node_child_process());
     import_node_fs7 = __toESM(require_node_fs());
     import_node_path7 = __toESM(require_node_path());
+    init_caps();
     init_collate();
     init_stoplist();
     init_suggest();
@@ -56366,7 +56370,7 @@ function importAliases(canonical, category) {
 }
 function personCandidate(name, source, evidence, count = 1) {
   const canonical = name.trim().replace(/\s+/g, " ");
-  if (canonical.length < 2 || canonical.length > 80) return void 0;
+  if (canonical.length < 2 || !fitsLexiconWord(canonical)) return void 0;
   if (/@/.test(canonical) || /\[bot\]$/i.test(canonical) || /\bbot\b/i.test(canonical)) return void 0;
   return {
     canonical,
@@ -56566,6 +56570,7 @@ async function applyImportCandidates(candidates, opts = {}) {
   const scope = opts.scope ?? "global";
   let added = 0;
   let merged = 0;
+  let skipped = 0;
   let path31;
   for (const c of candidates) {
     const term = {
@@ -56574,14 +56579,19 @@ async function applyImportCandidates(candidates, opts = {}) {
       category: c.category,
       source: c.source
     };
-    const result = await addTerm(term, { ...opts, scope });
-    path31 ??= result.file.path;
-    if (result.created) added += 1;
-    else merged += 1;
+    try {
+      const result = await addTerm(term, { ...opts, scope });
+      path31 ??= result.file.path;
+      if (result.created) added += 1;
+      else merged += 1;
+    } catch (err) {
+      if (!isInputError(err)) throw err;
+      skipped += 1;
+    }
   }
-  return { added, merged, skipped: 0, ...path31 !== void 0 ? { path: path31 } : {} };
+  return { added, merged, skipped, ...path31 !== void 0 ? { path: path31 } : {} };
 }
-var import_node_child_process2, import_node_fs8, import_node_os4, import_node_path8, IMPORT_SOURCE_IDS, defaultDeps, CONTACTS_QUERY, contactsSource, MAX_ICS_FILES, MAX_ICS_BYTES, calendarSource, githubSource, SOURCES;
+var import_node_child_process2, import_node_fs8, import_node_os4, import_node_path8, IMPORT_SOURCE_IDS, defaultDeps, fitsLexiconWord, CONTACTS_QUERY, contactsSource, MAX_ICS_FILES, MAX_ICS_BYTES, calendarSource, githubSource, SOURCES;
 var init_import_sources = __esm({
   "src/core/import-sources.ts"() {
     import_node_child_process2 = __toESM(require_node_child_process());
@@ -56589,6 +56599,7 @@ var init_import_sources = __esm({
     import_node_os4 = __toESM(require_node_os());
     import_node_path8 = __toESM(require_node_path());
     init_json();
+    init_errors4();
     init_caps();
     init_harvest();
     init_store();
@@ -56615,6 +56626,7 @@ var init_import_sources = __esm({
       },
       exec: ((file2, args) => (0, import_node_child_process2.execFileSync)(file2, [...args], { encoding: "utf8", timeout: 15e3, stdio: ["ignore", "pipe", "ignore"] }))
     });
+    fitsLexiconWord = (s) => Array.from(s).length <= LIMITS.word;
     CONTACTS_QUERY = "SELECT ZFIRSTNAME, ZLASTNAME, ZORGANIZATION FROM ZABCDCONTACT WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL OR ZORGANIZATION IS NOT NULL;";
     contactsSource = {
       id: "contacts",
@@ -56643,7 +56655,7 @@ var init_import_sources = __esm({
           const person = personCandidate(name, "import:contacts", "macOS Contacts");
           if (person) candidates.push(person);
           const organization = org.trim();
-          if (organization.length >= 3 && organization.length <= 80 && !/@/.test(organization)) {
+          if (organization.length >= 3 && fitsLexiconWord(organization) && !/@/.test(organization)) {
             candidates.push({
               canonical: organization,
               category: "brand",
@@ -56693,6 +56705,7 @@ var init_import_sources = __esm({
             }
             if (event.summary) {
               for (const noun of titleProperNouns(event.summary)) {
+                if (!fitsLexiconWord(noun)) continue;
                 candidates.push({
                   canonical: noun,
                   category: "other",
@@ -56749,7 +56762,7 @@ var init_import_sources = __esm({
           const orgRepos = ghJson(d, ["api", `orgs/${org}/repos`, "--paginate"]);
           if (Array.isArray(orgRepos)) {
             for (const r of orgRepos.filter(isRecord2)) {
-              if (typeof r.name === "string" && r.name.trim()) {
+              if (typeof r.name === "string" && r.name.trim() && fitsLexiconWord(r.name.trim())) {
                 candidates.push({
                   canonical: r.name,
                   category: "product",
@@ -56765,7 +56778,7 @@ var init_import_sources = __esm({
         const repos = ghJson(d, ["api", "user/repos", "--paginate"]);
         if (Array.isArray(repos)) {
           for (const r of repos.filter(isRecord2).slice(0, 200)) {
-            if (typeof r.name === "string" && r.name.trim()) {
+            if (typeof r.name === "string" && r.name.trim() && fitsLexiconWord(r.name.trim())) {
               const owner = isRecord2(r.owner) && typeof r.owner.login === "string" ? r.owner.login : void 0;
               candidates.push({
                 canonical: r.name,
@@ -58447,6 +58460,20 @@ function assertNoLostCharacters(terms, filename) {
     );
   }
 }
+function overLimitField(term) {
+  if (schemaLength(term.canonical) > LIMITS.word) return `canonical must be at most ${LIMITS.word} characters`;
+  for (const [field, list] of [["aliases", term.aliases], ["never", term.never]]) {
+    const at = (list ?? []).findIndex((s) => schemaLength(s) > LIMITS.word);
+    if (at >= 0) return `${field}[${at}] must be at most ${LIMITS.word} characters`;
+  }
+  for (const field of ["phonetic", "notes"]) {
+    const value = term[field];
+    if (typeof value === "string" && schemaLength(value) > LIMITS.text) {
+      return `${field} must be at most ${LIMITS.text} characters`;
+    }
+  }
+  return void 0;
+}
 function mergeRows(rows, source) {
   const byKey = /* @__PURE__ */ new Map();
   const skipped = [];
@@ -58454,6 +58481,11 @@ function mergeRows(rows, source) {
     const canonical = term.canonical.trim();
     if (!canonical) {
       skipped.push({ line: line2, reason: "empty canonical" });
+      continue;
+    }
+    const over = overLimitField(term);
+    if (over !== void 0) {
+      skipped.push({ line: line2, reason: over });
       continue;
     }
     const key = canonical.toLowerCase();
@@ -58464,7 +58496,7 @@ function mergeRows(rows, source) {
     }
     const seen = new Set(target.aliases.map((a) => a.toLowerCase()));
     for (const alias of term.aliases) {
-      const a = alias.trim();
+      const a = stripInvisible(alias).trim();
       const k = a.toLowerCase();
       if (!a || k === key || seen.has(k)) continue;
       seen.add(k);
@@ -58476,15 +58508,22 @@ function mergeRows(rows, source) {
     if (term.caseSensitive !== void 0 && target.caseSensitive === void 0) target.caseSensitive = term.caseSensitive;
     if (term.never?.length) {
       const have = new Set((target.never ?? []).map((n) => n.toLowerCase()));
-      target.never = [...target.never ?? [], ...term.never.filter((n) => !have.has(n.toLowerCase()))];
+      for (const raw of term.never) {
+        const n = stripInvisible(raw).trim();
+        const k = n.toLowerCase();
+        if (!n || have.has(k)) continue;
+        have.add(k);
+        (target.never ??= []).push(n);
+      }
     }
   }
   return { terms: [...byKey.values()], skipped };
 }
-var import_yaml7, IMPORT_FORMAT_INFO, PARSERS;
+var import_yaml7, IMPORT_FORMAT_INFO, PARSERS, schemaLength;
 var init_importers = __esm({
   "src/core/importers/index.ts"() {
     init_caps();
+    init_schema();
     import_yaml7 = __toESM(require_dist2());
     init_yaml_guard();
     init_encoding();
@@ -58519,6 +58558,7 @@ var init_importers = __esm({
       text: parseTextImport,
       json: parseJsonImport
     };
+    schemaLength = (s) => Array.from(stripInvisible(s).trim()).length;
   }
 });
 

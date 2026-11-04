@@ -4,7 +4,8 @@
  * objects. Pure: no IO. The CLI (`lexicon import`) reads the file and writes
  * the terms with addTerm.
  */
-import { IMPORT_FORMATS } from '../caps.js';
+import { IMPORT_FORMATS, LIMITS } from '../caps.js';
+import { stripInvisible } from '../schema.js';
 import { parse as parseYaml } from 'yaml';
 import { guardYamlImport } from './yaml-guard.js';
 import type { Term, TermSource } from '../types.js';
@@ -197,6 +198,30 @@ function assertNoLostCharacters(terms: readonly Term[], filename?: string): void
   }
 }
 
+/** Length as the schema measures it: invisible characters stripped, trimmed, in code points. */
+const schemaLength = (s: string): number => Array.from(stripInvisible(s).trim()).length;
+
+/**
+ * The first field of `term` over its schema limit, as a skip reason worded as
+ * the schema words it, or undefined. A row carrying one can never be written
+ * (`addTerm` refuses it), so it is reported like a blank canonical instead of
+ * aborting the add loop after the terms before it were written.
+ */
+function overLimitField(term: Term): string | undefined {
+  if (schemaLength(term.canonical) > LIMITS.word) return `canonical must be at most ${LIMITS.word} characters`;
+  for (const [field, list] of [['aliases', term.aliases], ['never', term.never]] as const) {
+    const at = (list ?? []).findIndex((s) => schemaLength(s) > LIMITS.word);
+    if (at >= 0) return `${field}[${at}] must be at most ${LIMITS.word} characters`;
+  }
+  for (const field of ['phonetic', 'notes'] as const) {
+    const value = term[field];
+    if (typeof value === 'string' && schemaLength(value) > LIMITS.text) {
+      return `${field} must be at most ${LIMITS.text} characters`;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Collapse rows into one Term per canonical (case-insensitive; the first
  * spelling seen wins). Aliases are unioned, deduped case-insensitively, and
@@ -212,6 +237,11 @@ export function mergeRows(rows: readonly ImportRow[], source?: TermSource): { te
       skipped.push({ line, reason: 'empty canonical' });
       continue;
     }
+    const over = overLimitField(term);
+    if (over !== undefined) {
+      skipped.push({ line, reason: over });
+      continue;
+    }
     const key = canonical.toLowerCase();
     let target = byKey.get(key);
     if (!target) {
@@ -220,7 +250,9 @@ export function mergeRows(rows: readonly ImportRow[], source?: TermSource): { te
     }
     const seen = new Set(target.aliases.map((a) => a.toLowerCase()));
     for (const alias of term.aliases) {
-      const a = alias.trim();
+      // Cleaned as the schema reads it: an entry that cleans to nothing is
+      // dropped here, as the schema drops it, rather than refused by addTerm.
+      const a = stripInvisible(alias).trim();
       const k = a.toLowerCase();
       if (!a || k === key || seen.has(k)) continue;
       seen.add(k);
@@ -232,7 +264,13 @@ export function mergeRows(rows: readonly ImportRow[], source?: TermSource): { te
     if (term.caseSensitive !== undefined && target.caseSensitive === undefined) target.caseSensitive = term.caseSensitive;
     if (term.never?.length) {
       const have = new Set((target.never ?? []).map((n) => n.toLowerCase()));
-      target.never = [...(target.never ?? []), ...term.never.filter((n) => !have.has(n.toLowerCase()))];
+      for (const raw of term.never) {
+        const n = stripInvisible(raw).trim();
+        const k = n.toLowerCase();
+        if (!n || have.has(k)) continue;
+        have.add(k);
+        (target.never ??= []).push(n);
+      }
     }
   }
   return { terms: [...byKey.values()], skipped };
