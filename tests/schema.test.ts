@@ -1153,6 +1153,17 @@ describe('hardening (lexicon content reaches model context)', () => {
     );
   });
 
+  it('accepts a 200-character phonetic pronunciation from YAML and rejects one character more', () => {
+    const phonetic = `${'ASH-ler / '.repeat(19)}ASH-ler /x`;
+    expect(phonetic).toHaveLength(200);
+    const input = (value: string) => parseYaml(`terms:\n  - canonical: Ashlr.AI\n    phonetic: "${value}"\n`);
+
+    expect(parseLexicon(input(phonetic)).terms[0].phonetic).toBe(phonetic);
+    expect(() => parseLexicon(input(`${phonetic}x`))).toThrow(
+      'terms[0].phonetic: must be at most 200 characters',
+    );
+  });
+
   it('enforces the 80-character word boundary on the fields of a standalone term', () => {
     const word = 'w'.repeat(LIMITS.word);
     const term = TermSchema.parse({ canonical: word, aliases: [word], never: [word] });
