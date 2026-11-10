@@ -2,7 +2,7 @@ import { promises as fs, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EXPORT_ALIAS_ROW_FORMATS, exportLexicon } from '../src/core/exporters/index.js';
+import { EXPORT_ALIAS_ROW_FORMATS, EXPORT_FORMATS, exportLexicon } from '../src/core/exporters/index.js';
 import {
   emptyExportNote,
   emptyExportReason,
@@ -50,6 +50,18 @@ describe('core notes', () => {
     expect(JSON.parse(exportLexicon(loaded.merged, 'json')).terms).toEqual(bare);
     expect(emptyExportReason(loaded, 'json')).toBeUndefined();
     expect(exportNote(loaded, 'json', {})).toBeUndefined();
+  });
+
+  it('reports a skipped project before export filters or format-specific empty rows', () => {
+    for (const trust of ['untrusted', 'changed'] as const) {
+      const loaded = loadedOf([], trust);
+      for (const format of EXPORT_FORMATS) {
+        expect(emptyExportReason(loaded, format, { categories: ['person'], limit: 1 })).toBe('only-untrusted');
+        expect(exportNote(loaded, format, { categories: ['person'], limit: 1 })).toBe(
+          emptyExportNote('only-untrusted', { format, filter: '?category=person' }),
+        );
+      }
+    }
   });
 
   // Catches: a lexicon that has an alias being told "No exported term has an
